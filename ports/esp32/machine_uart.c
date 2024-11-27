@@ -57,9 +57,17 @@
 #define UART_IRQ_RX (1 << UART_DATA)
 #define UART_IRQ_RXIDLE (0x1000)
 #define UART_IRQ_BREAK (1 << UART_BREAK)
-#define MP_UART_ALLOWED_FLAGS (UART_IRQ_RX | UART_IRQ_RXIDLE | UART_IRQ_BREAK)
+#define MP_UART_ALLOWED_FLAGS (UART_IRQ_RX | UART_IRQ_RXIDLE | UART_IRQ_BREAK | UART_IRQ_RXFIFO_FULL)
 #define RXIDLE_TIMER_MIN (5000)  // 500 us
 
+// 修改 UART_RXFIFO_FULL 的定义
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
+    #define UART_RXFIFO_FULL UART_EVENT_RXFIFO_FULL  // 使用 UART_EVENT_RXFIFO_FULL 替代
+#else
+    #define UART_RXFIFO_FULL UART_EVENT_RX_FULL
+#endif
+
+#define UART_IRQ_RXFIFO_FULL (1 << 4)  // 直接使用数值 4，或者其他合适的值
 enum {
     RXIDLE_INACTIVE,
     RXIDLE_STANDBY,
@@ -108,6 +116,7 @@ static const char *_parity_name[] = {"None", "1", "0"};
     { MP_ROM_QSTR(MP_QSTR_IRQ_RX), MP_ROM_INT(UART_IRQ_RX) }, \
     { MP_ROM_QSTR(MP_QSTR_IRQ_RXIDLE), MP_ROM_INT(UART_IRQ_RXIDLE) }, \
     { MP_ROM_QSTR(MP_QSTR_IRQ_BREAK), MP_ROM_INT(UART_IRQ_BREAK) }, \
+    { MP_ROM_QSTR(MP_QSTR_IRQ_RXFIFO_FULL), MP_ROM_INT(UART_IRQ_RXFIFO_FULL) }, \
 
 static void uart_timer_callback(void *self_in) {
     machine_timer_obj_t *self = self_in;
@@ -157,6 +166,9 @@ static void uart_event_task(void *self_in) {
                         self->rxidle_state = RXIDLE_ALERT;
                     }
                     mp_irq_flags |= UART_IRQ_RX;
+                    break;
+                case UART_FIFO_OVF:  // 使用 UART_FIFO_OVF 替代
+                    mp_irq_flags |= UART_IRQ_RXFIFO_FULL;
                     break;
                 case UART_BREAK:
                     mp_irq_flags |= UART_IRQ_BREAK;
@@ -373,6 +385,12 @@ static void mp_machine_uart_init_helper(machine_uart_obj_t *self, size_t n_args,
     if (args[ARG_timeout_char].u_int != -1) {
         self->timeout_char = args[ARG_timeout_char].u_int;
     }
+
+    if (self->mp_irq_trigger & UART_IRQ_RXFIFO_FULL) {
+        // 设置 RXFIFO_FULL 阈值，可以根据需要调整
+        check_esp_err(uart_set_rx_full_threshold(self->uart_num, 100));
+    }
+
     // make sure it is at least as long as a whole character (12 bits here)
     uint32_t char_time_ms = 12000 / baudrate + 1;
     uint32_t rx_timeout = self->timeout_char / char_time_ms;
